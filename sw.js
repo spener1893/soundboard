@@ -1,6 +1,6 @@
 // Offline-Speicher für das Soundboard.
 // Nach Änderungen an index.html die Versionsnummer erhöhen, damit das iPad die neue Fassung holt.
-const CACHE = 'soundboard-v1';
+const CACHE = 'soundboard-v2';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

@@ -82,7 +82,8 @@ function makeNoise(sr) {
 
 function init() {
   if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
-  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  try { ctx = new AC({ latencyHint: 'interactive' }); } catch(e) { ctx = new AC(); }
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -12; comp.ratio.value = 4;
   master = ctx.createGain(); master.gain.value = +document.getElementById('vol').value;
@@ -261,14 +262,17 @@ const SOUNDS = [
 async function normalizeAll() {
   for (const s of SOUNDS) {
     try {
-      const sr = 22050, oc = new OfflineAudioContext(1, Math.ceil((s.dur + 0.5) * sr), sr);
+      const sr = ctx.sampleRate, oc = new OfflineAudioContext(1, Math.ceil((s.dur + 0.5) * sr), sr);
       const b = oc.createGain(); b.connect(oc.destination);
-      s.play(b, 0.02);
-      const d = (await oc.startRendering()).getChannelData(0);
+      s.play(b, 0.005);
+      const buf = await oc.startRendering(), d = buf.getChannelData(0);
       const W = Math.floor(sr * 0.4), H = Math.floor(sr * 0.05);
+      const P = new Float64Array(d.length + 1);
+      for (let i = 0; i < d.length; i++) P[i + 1] = P[i] + d[i] * d[i];
       let max = 0;
-      for (let i = 0; i + W < d.length; i += H) { let sum = 0; for (let j = i; j < i + W; j++) sum += d[j] * d[j]; max = Math.max(max, Math.sqrt(sum / W)); }
+      for (let i = 0; i + W < d.length; i += H) max = Math.max(max, Math.sqrt((P[i + W] - P[i]) / W));
       if (max > 0) s.norm = Math.min(6, Math.max(0.15, TARGET / max));
+      if (!s.loop) s.buf = buf;   // vorberechneter Klang: spielt sofort, ohne Rechenlast
     } catch (e) { s.norm = 1; }
   }
 }
@@ -280,7 +284,7 @@ SOUNDS.forEach(s => {
   const el = document.createElement('div');
   el.className = 'pad' + (s.big ? ' big' : '');
   el.innerHTML = `<div><span class="key">${s.label || s.key}</span></div><div><div class="name">${s.name}</div><div class="hint">${s.hint}</div></div><button class="own" title="Eigene Audiodatei zuweisen">♪ eigene</button>`;
-  el.addEventListener('click', e => { if (e.target.classList.contains('own')) return; trigger(s); });
+  el.addEventListener('pointerdown', e => { if (e.target.classList.contains('own') || e.button > 0) return; e.preventDefault(); trigger(s); });
   el.querySelector('.own').addEventListener('click', e => { e.stopPropagation(); pickFile(s, e.target); });
   grid.appendChild(el); s.el = el;
 });
@@ -300,7 +304,8 @@ function trigger(s) {
   if (a) { a.volume = vol; a.currentTime = 0; a.play(); return; }
   const b = ctx.createGain(); b.gain.value = s.norm; b.connect(master); buses.add(b);
   setTimeout(() => { try { b.disconnect(); } catch(e){} buses.delete(b); }, (s.dur + 1) * 1000);
-  s.play(b, ctx.currentTime + 0.02);
+  if (s.buf) { const src = ctx.createBufferSource(); src.buffer = s.buf; src.connect(b); src.start(); }
+  else s.play(b, ctx.currentTime + 0.01);
 }
 function stopAll() {
   if (!ctx) return;
@@ -338,6 +343,7 @@ document.addEventListener('keydown', e => {
   if (s) { e.preventDefault(); trigger(s); }
 });
 document.getElementById('start').addEventListener('click', init);
+['click', 'touchend'].forEach(ev => document.addEventListener(ev, () => { if (ctx && ctx.state !== 'running') ctx.resume(); }, { passive: true }));
 document.getElementById('stopBtn').addEventListener('click', () => { init(); stopAll(); });
 document.getElementById('fsBtn').addEventListener('click', () => { init(); toggleFs(); });
 document.getElementById('vol').addEventListener('input', e => { if (master) master.gain.value = +e.target.value; });
